@@ -20,7 +20,10 @@ jobs:
       - name: Sync version from tag
         run: |
           TAG_VERSION=${GITHUB_REF#refs/tags/v}
-          npm version --no-git-tag-version "$TAG_VERSION"
+          CURRENT=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$CURRENT" ]; then
+            npm version --no-git-tag-version "$TAG_VERSION"
+          fi
 
       - name: Install vsce
         run: npm install -g @vscode/vsce
