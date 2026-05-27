@@ -283,45 +283,49 @@ function activate(context) {
     })
   );
 
+  context.subscriptions.push(output);
+
   context.subscriptions.push(
-    vscode.workspace.onWillSaveTextDocument(async (e) => {
-      const sequences = vscode.workspace
-        .getConfiguration('savePipeline')
-        .get('sequences', []);
-      const lang = e.document.languageId;
+    vscode.workspace.onWillSaveTextDocument((e) => {
+      e.waitUntil((async () => {
+        const sequences = vscode.workspace
+          .getConfiguration('savePipeline')
+          .get('sequences', []);
+        const lang = e.document.languageId;
 
-      for (const seq of sequences) {
-        const event = seq.event ?? 'onSave';
-        if (event !== 'onSave') continue;
+        for (const seq of sequences) {
+          const event = seq.event ?? 'onSave';
+          if (event !== 'onSave') continue;
 
-        if (seq.languages?.length && !seq.languages.includes(lang)) continue;
+          if (seq.languages?.length && !seq.languages.includes(lang)) continue;
 
-        if (seq.exclude?.length && shouldExclude(e.document, seq.exclude)) {
-          output.info(`[${seq.label ?? 'unnamed'}] skipped (exclude matched)`);
-          continue;
-        }
+          if (seq.exclude?.length && shouldExclude(e.document, seq.exclude)) {
+            output.info(`[${seq.label ?? 'unnamed'}] skipped (exclude matched)`);
+            continue;
+          }
 
-        output.info(`[${seq.label ?? 'unnamed'}] running ${seq.steps?.length ?? 0} step(s)`);
+          output.info(`[${seq.label ?? 'unnamed'}] running ${seq.steps?.length ?? 0} step(s)`);
 
-        for (const step of seq.steps ?? []) {
-          try {
-            if (step.command) {
-              output.info(`[${seq.label ?? 'unnamed'}] command: ${step.command}`);
-              await vscode.commands.executeCommand(step.command);
-            } else if (step.shell) {
-              const cmd = resolvePlaceholders(step.shell, e.document);
-              output.info(`[${seq.label ?? 'unnamed'}] shell: ${cmd}`);
-              await execShell(cmd, step, e.document, output);
-            } else {
-              output.warn(`[${seq.label ?? 'unnamed'}] step missing both "command" and "shell", skipped`);
+          for (const step of seq.steps ?? []) {
+            try {
+              if (step.command) {
+                output.info(`[${seq.label ?? 'unnamed'}] command: ${step.command}`);
+                await vscode.commands.executeCommand(step.command);
+              } else if (step.shell) {
+                const cmd = resolvePlaceholders(step.shell, e.document);
+                output.info(`[${seq.label ?? 'unnamed'}] shell: ${cmd}`);
+                await execShell(cmd, step, e.document, output);
+              } else {
+                output.warn(`[${seq.label ?? 'unnamed'}] step missing both "command" and "shell", skipped`);
+              }
+            } catch (err) {
+              output.error(`[${seq.label ?? 'unnamed'}] ${step.command ?? step.shell} → ${String(err)}`);
+              output.show(true);
+              break;
             }
-          } catch (err) {
-            output.error(`[${seq.label ?? 'unnamed'}] ${step.command ?? step.shell} → ${err.message}`);
-            output.show(true);
-            break;
           }
         }
-      }
+      })());
     })
   );
 }
@@ -336,7 +340,7 @@ function resolvePlaceholders(template, document) {
     .replace(/\$\{fileBasenameNoExt\}/g, path.basename(filePath, path.extname(filePath)))
     .replace(/\$\{fileExtname\}/g, path.extname(filePath))
     .replace(/\$\{fileDirname\}/g, path.dirname(filePath))
-    .replace(/\$\{relativeFile\}/g, path.relative(wsPath, filePath))
+    .replace(/\$\{relativeFile\}/g, path.relative(wsPath, filePath) || path.basename(filePath))
     .replace(/\$\{workspaceFolder\}/g, wsPath)
     .replace(/\$\{cwd\}/g, process.cwd())
     .replace(/\$\{env\.(\w+)\}/g, (_, name) => process.env[name] ?? '');
@@ -382,7 +386,9 @@ function globToRegex(pattern) {
   return new RegExp('^' + escaped + '$');
 }
 
-function deactivate() {}
+function deactivate() {
+  // output channel is auto-disposed via context.subscriptions
+}
 
 module.exports = { activate, deactivate };
 ```
@@ -454,47 +460,45 @@ vsce package
 
 ## 7. 发布到 VS Code Marketplace
 
-### 7.1 获取 Personal Access Token
+> 采用 **CI 打包 + 手动上传** 方式，无需安装 `@vscode/vsce` 或配置 PAT。
 
-1. 登录 [Azure DevOps](https://dev.azure.com)
-2. 创建组织（organization），名称即 `publisher` 字段的值，如 `your-publisher-id`
-3. 点击右上角头像 → **Personal access tokens** → **New Token**
-4. 设置：
-   - **Name**：`vscode-publish`（任意）
-   - **Organization**：选择刚创建的组织
-   - **Scopes**：勾选 **Marketplace (Publish)**
-   - **Expiration**：建议 1 年以上
-5. 复制生成的 token（只显示一次）
+### 7.1 创建 Publisher（仅首次）
 
-### 7.2 发布命令
+1. 打开 https://marketplace.visualstudio.com/manage
+2. 用 Microsoft 账号登录
+3. 点击 **Create a publisher**，输入：
+   - **ID**：全局唯一，如 `your-publisher-id`
+   - **Name**：显示名称
+4. 记下 publisher ID，写入 `package.json` 的 `publisher` 字段
 
-```bash
-vsce login your-publisher-id
-# 粘贴上面获得的 PAT
-
-vsce publish
-```
-
-或一步到位：
+### 7.2 推送 tag 触发 CI 打包
 
 ```bash
-vsce publish -p <YOUR_PAT>
+# 更新 version（手动改 package.json）
+git add package.json
+git commit -m "chore: bump version to 0.1.1"
+
+# 创建 tag 并推送
+git tag v0.1.1
+git push origin main && git push origin v0.1.1
 ```
 
-### 7.3 版本号更新
+CI 会自动：
+- 打包 `.vsix`
+- 创建 GitHub Release 并附上 `.vsix` 文件
 
-每次发布前必须递增 `version` 字段（`major.minor.patch`）：
+### 7.3 手动上传到 Marketplace
 
-```bash
-# 小修复：0.1.0 → 0.1.1
-vsce publish patch
+1. 打开 https://github.com/ixtWuko/vscode-save-pipeline/releases
+2. 找到对应版本的 Release
+3. 下载 `.vsix` 附件
+4. 打开 https://marketplace.visualstudio.com/manage
+5. 选择你的 publisher → **New extension** → 拖入 `.vsix` 文件
+6. 上传后默认只自己可见，去 **Manage** → **Share/Unshare** 设为公开
 
-# 小功能：0.1.0 → 0.2.0
-vsce publish minor
+### 7.4 版本号更新
 
-# 大改动：0.1.0 → 1.0.0
-vsce publish major
-```
+每次发布前递增 `version` 字段（`major.minor.patch`），对应 git tag 加 `v` 前缀：`v0.1.0` `v0.1.1` `v0.2.0`。
 
 ---
 
@@ -502,18 +506,14 @@ vsce publish major
 
 ### 8.1 概述
 
-GitHub Actions 工作流在 push tag 时自动打包并发布扩展。你需要：
-
-1. 将代码推送到 GitHub
-2. 在 GitHub 仓库设置中配置 Secrets
-3. 推送语义化版本 tag
+GitHub Actions 工作流在 push tag 时自动打包 `.vsix` 并创建 Release，供手动下载上传到 Marketplace。
 
 ### 8.2 工作流文件
 
 在 `.github/workflows/publish.yml` 中写入：
 
 ```yaml
-name: Publish VS Code Extension
+name: Build VSIX
 
 on:
   push:
@@ -521,90 +521,64 @@ on:
       - 'v*'
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
-
-      - name: Install vsce
-        run: npm install -g @vscode/vsce
-
-      - name: Publish to Marketplace
-        run: vsce publish -p ${{ secrets.VSCE_PAT }}
-```
-
-### 8.3 配置 GitHub Secrets
-
-1. 打开 GitHub 仓库 → **Settings** → **Secrets and variables** → **Actions**
-2. 点击 **New repository secret**
-3. Name：`VSCE_PAT`，Value：你在第 7.1 步获取的 PAT
-4. 点击 **Add secret**
-
-### 8.4 触发发布
-
-```bash
-# 确保工作区干净
-git status
-
-# 更新版本号（手动修改 package.json 中的 version），然后：
-git add package.json
-git commit -m "chore: bump version to 0.1.1"
-
-# 创建 tag 并推送
-git tag v0.1.1
-git push origin main
-git push origin v0.1.1
-```
-
-GitHub Actions 检测到 `v*` tag 被推送后会自动运行工作流：
-- 拉取代码
-- 安装 Node.js 20
-- 全局安装 `@vscode/vsce`
-- 执行 `vsce publish -p $VSCE_PAT`
-
-### 8.5 进阶 CI：带版本号同步
-
-如果想让 tag 自动同步到 `package.json` 的 `version` 字段，可用增强版工作流：
-
-```yaml
-name: Publish VS Code Extension
-
-on:
-  push:
-    tags:
-      - 'v*'
-
-jobs:
-  publish:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Sync version from tag
         run: |
           TAG_VERSION=${GITHUB_REF#refs/tags/v}
-          npm version --no-git-tag-version "$TAG_VERSION"
+          CURRENT=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$CURRENT" ]; then
+            npm version --no-git-tag-version "$TAG_VERSION"
+          fi
 
       - name: Install vsce
         run: npm install -g @vscode/vsce
 
-      - name: Publish to Marketplace
-        run: vsce publish -p ${{ secrets.VSCE_PAT }}
+      - name: Package VSIX
+        run: vsce package
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: ./*.vsix
+          generate_release_notes: true
 ```
 
-这样 `git tag v0.2.0 && git push origin v0.2.0` 即可发布，无需手动改 `package.json`。
+### 8.3 触发流程
+
+```bash
+# 确保工作区干净、版本已更新
+git tag v0.1.1
+git push origin main && git push origin v0.1.1
+```
+
+GitHub Actions 检测到 `v*` tag 推送后自动执行：
+- 同步 version 到 tag 版本
+- 执行 `vsce package` 生成 `.vsix`
+- 创建 GitHub Release，附件包含 `.vsix`
+- 自动生成 Release Notes
+
+### 8.4 手动发布流程（无需 tag 推送）
+
+如需手动打包（如本地验证）：
+
+```bash
+npm install -g @vscode/vsce
+vsce package
+```
+
+生成 `save-pipeline-0.1.0.vsix` 后，同样拖入 Marketplace 管理页面上传。
 
 ---
 
@@ -638,10 +612,12 @@ Run configurable sequences of VS Code commands and shell commands on file save.
 
 ## Features
 
-- Execute any VS Code command or shell command in sequence on save
-- Filter by language ID or glob patterns
-- Built-in placeholders like `${file}`, `${workspaceFolder}`
+- Execute any VS Code command and shell command in sequence on save
+- Filter by `languageId` and glob `exclude` patterns
+- Built-in placeholders: `${file}`, `${workspaceFolder}`, `${relativeFile}`, `${env.VAR}`
+- `waitUntil` — VS Code waits for all steps before writing to disk
 - Zero dependencies (pure Node.js + VS Code API)
+- Output Channel logging with auto-reveal on errors
 
 ## Configuration
 
@@ -651,10 +627,11 @@ Edit your `settings.json`:
 "savePipeline.sequences": [
   {
     "languages": ["python"],
+    "label": "Organize → Format → Lint",
     "steps": [
-      { "command": "editor.action.organizeImports" },
+      { "command": "python.sortImports" },
       { "command": "editor.action.formatDocument" },
-      { "shell": "ruff check --fix ${file}" }
+      { "shell": "ruff check ${file}" }
     ]
   }
 ]
@@ -720,7 +697,7 @@ Save Pipeline Extension
 ├── 开发工具
 │   └── @vscode/vsce        ← 全局安装：打包 & 发布
 └── CI/CD
-    └── GitHub Actions      ← ubuntu-latest + Node.js 20
+    └── GitHub Actions      ← ubuntu-latest + Node.js 24
 ```
 
 > **项目文件大小**: extension.js &asymp; 200 行，package.json &asymp; 70 行。零编译、零构建、零依赖。
