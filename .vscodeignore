@@ -1,0 +1,8 @@
+.vscode/**
+.github/**
+.git
+.gitignore
+node_modules/**
+.vscodeignore
+CONTRIBUTING.md
+DESIGN.md

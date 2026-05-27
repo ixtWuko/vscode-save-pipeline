@@ -1,0 +1,101 @@
+{
+  "name": "save-pipeline",
+  "displayName": "Save Pipeline",
+  "description": "Run configurable sequences of VS Code commands and shell commands on file save",
+  "version": "0.1.1",
+  "publisher": "ixtwuko",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ixtwuko/vscode-save-pipeline.git"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "keywords": ["save", "pipeline", "format", "shell", "onSave"],
+  "preview": false,
+  "categories": [
+    "Other"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited"
+    }
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "configuration": {
+      "type": "object",
+      "title": "Save Pipeline",
+      "properties": {
+        "savePipeline.sequences": {
+          "type": "array",
+          "default": [],
+          "description": "Command sequences to execute on file save",
+          "items": {
+            "type": "object",
+            "properties": {
+              "event": {
+                "type": "string",
+                "default": "onSave",
+                "enum": ["onSave"],
+                "description": "Trigger event. v0.1: only \"onSave\" is supported."
+              },
+              "languages": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Target language IDs. Leave empty for all files."
+              },
+              "label": {
+                "type": "string",
+                "description": "Optional label for debugging."
+              },
+              "exclude": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Glob patterns to exclude files from this sequence."
+              },
+              "steps": {
+                "type": "array",
+                "description": "Ordered steps to execute. Each step is either a VS Code command or a shell command.",
+                "items": {
+                  "type": "object",
+                  "oneOf": [
+                    { "required": ["command"] },
+                    { "required": ["shell"] }
+                  ],
+                  "properties": {
+                    "command": {
+                      "type": "string",
+                      "description": "VS Code command ID to execute."
+                    },
+                    "shell": {
+                      "type": "string",
+                      "description": "Shell command to run. Supports placeholders like ${file}, ${workspaceFolder}."
+                    },
+                    "cwd": {
+                      "type": "string",
+                      "description": "Working directory for shell step. Defaults to ${workspaceFolder}."
+                    },
+                    "timeout": {
+                      "type": "number",
+                      "description": "Timeout in ms for shell step. Default 30000."
+                    },
+                    "env": {
+                      "type": "object",
+                      "description": "Extra environment variables for shell step."
+                    }
+                  }
+                }
+              }
+            },
+            "required": ["steps"]
+          }
+        }
+      }
+    }
+  }
+}
